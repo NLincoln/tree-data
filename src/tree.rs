@@ -1,12 +1,9 @@
-use crate::{Database, Disk};
+use crate::Disk;
 use byteorder::{BigEndian, ReadBytesExt};
 
 use std::convert::TryInto;
+use std::io;
 use std::io::SeekFrom;
-use std::{
-    io,
-    sync::{Arc, Mutex},
-};
 
 struct TreeNode {}
 

@@ -1,11 +1,17 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use std::convert::TryInto;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 pub trait Disk: Read + Write + Seek {}
 impl<T: Read + Write + Seek> Disk for T {}
 
+pub trait BlockAllocator {
+    fn allocate_block(&mut self) -> io::Result<u64>;
+    fn write(&mut self, offset: u64, data: &[u8]) -> io::Result<()>;
+}
+
 pub struct Database<D: Disk> {
-    disk: D,
+    pub(crate) disk: D,
     meta: DatabaseMeta,
 }
 
@@ -13,7 +19,23 @@ struct DatabaseMeta {
     block_size_exp: u64,
     num_blocks_allocated: u64,
 }
+
+impl DatabaseMeta {
+    fn block_size(&self) -> u64 {
+        2u64.pow(self.block_size_exp.try_into().unwrap())
+    }
+    fn persist(&self, disk: &mut impl Disk) -> io::Result<()> {
+        disk.seek(SeekFrom::Start(0))?;
+        disk.write_u64::<BigEndian>(self.block_size_exp)?;
+        disk.write_u64::<BigEndian>(self.num_blocks_allocated)?;
+        Ok(())
+    }
+}
+
 impl<D: Disk> Database<D> {
+    pub fn block_size(&self) -> u64 {
+        self.meta.block_size()
+    }
     pub fn from_existing(mut disk: D) -> io::Result<Self> {
         let meta = Database::read_header(&mut disk)?;
         Ok(Database { disk, meta })
@@ -40,15 +62,31 @@ impl<D: Disk> Database<D> {
 
     fn init_header(disk: &mut D) -> io::Result<DatabaseMeta> {
         disk.seek(SeekFrom::Start(0))?;
-        let block_size_exp = 16u64;
-        disk.write_u64::<BigEndian>(block_size_exp)?;
-        let num_blocks_allocated = 0u64;
-        disk.write_u64::<BigEndian>(num_blocks_allocated)?;
+        let block_size_exp = 13u64;
+        // 1 for the meta block
+        let num_blocks_allocated = 1u64;
         let meta = DatabaseMeta {
             block_size_exp,
             num_blocks_allocated,
         };
+        meta.persist(disk)?;
         Ok(meta)
+    }
+}
+
+impl<D: Disk> BlockAllocator for Database<D> {
+    fn allocate_block(&mut self) -> io::Result<u64> {
+        let block_size = self.meta.block_size();
+        let new_offset = block_size * self.meta.num_blocks_allocated;
+        self.meta.num_blocks_allocated += 1;
+        self.meta.persist(&mut self.disk)?;
+        Ok(new_offset)
+    }
+
+    fn write(&mut self, offset: u64, data: &[u8]) -> io::Result<()> {
+        self.disk.seek(SeekFrom::Start(offset))?;
+        self.disk.write_all(data)?;
+        Ok(())
     }
 }
 
