@@ -14,12 +14,6 @@ pub struct BTree {
     root: PageOffset,
 }
 
-fn breakpoint(key: Key) {
-    if key >= 46 {
-        let a = 1;
-    }
-}
-
 fn safe_insert<T>(vec: &mut Vec<T>, idx: usize, val: T) {
     if idx == vec.len() {
         vec.push(val);
@@ -112,10 +106,11 @@ impl BTree {
                 );
                 let split_idx = left_sibling.keys.len() / 2;
                 let mut new_right_sibling = LeafPage::init(db)?;
+                let mut buf = vec![];
                 for entry in &left_sibling.keys[split_idx..] {
-                    let value = left_sibling.lookup_value_alloc(entry.key, &mut db.disk)?;
+                    let value = left_sibling.lookup_value(entry.key, &mut buf, &mut db.disk)?;
                     let value = value.expect("could not lookup value");
-                    new_right_sibling.upsert_value(entry.key, &value, db);
+                    new_right_sibling.upsert_value(entry.key, &buf, db);
                 }
                 left_sibling.keys.truncate(split_idx);
 
@@ -179,7 +174,6 @@ impl BTree {
         }
     }
     fn lookup<D: Disk>(&mut self, key: Key, db: &mut Database<D>) -> io::Result<Option<Vec<u8>>> {
-        breakpoint(key);
         let page = Page::load(self.root, db)?;
         return self.btree_search(page, key, db);
     }
@@ -360,7 +354,7 @@ impl LeafPage {
     pub(crate) fn lookup_value(
         &self,
         key: Key,
-        data: &mut [u8],
+        data: &mut Vec<u8>,
         disk: &mut impl Disk,
     ) -> io::Result<Option<u64>> {
         self.seek_to_offset(disk)?;
@@ -369,9 +363,10 @@ impl LeafPage {
             Some(entry) => entry,
             None => return Ok(None),
         };
-        assert!(data.len() >= entry.value_len as usize);
+
         disk.seek(SeekFrom::Current(entry.offset as i64))?;
-        disk.read_exact(&mut data[0..entry.value_len as usize])?;
+        data.resize(entry.value_len as usize, 0);
+        disk.read_exact(&mut data[..])?;
         return Ok(Some(entry.value_len));
     }
 
@@ -492,13 +487,13 @@ impl LeafPage {
         }
         panic!("No entries found in page. Page may be fragmented or too full");
     }
-    pub(crate) fn init<D: Disk>(disk: &mut Database<D>) -> io::Result<LeafPage> {
-        let page_size = disk.block_size();
-        let offset = disk.allocate_block()?;
+    pub(crate) fn init<D: Disk>(db: &mut Database<D>) -> io::Result<LeafPage> {
+        let page_size = db.block_size();
+        let offset = db.allocate_block()?;
         // idk we just need to write a nice page_size buffer to the disk
         let mut buf = vec![0u8; page_size as usize];
         buf[0] = Page::LEAF_TAG;
-        disk.write(offset, &buf)?;
+        db.write(offset, &buf)?;
         Ok(LeafPage {
             offset,
             keys: vec![],
@@ -521,8 +516,8 @@ mod tests_leafpage {
             page.upsert_value(i, &[0, 1, 2, 3], &mut db)?;
         }
         for i in 2..4 {
-            let mut buf = &mut [0u8; 4];
-            page.lookup_value(i, buf, &mut db.disk)?;
+            let mut buf = vec![];
+            page.lookup_value(i, &mut buf, &mut db.disk)?;
             assert_eq!(buf, &[0, 1, 2, 3]);
         }
         for i in 3..5 {
@@ -539,14 +534,13 @@ mod tests_leafpage {
         page.upsert_value(0, &[0, 1, 2, 3], &mut db)?;
         page.upsert_value(0, &[1, 2], &mut db)?;
 
-        let mut buf = &mut [0u8; 2];
-        page.lookup_value(0, buf, &mut db.disk)?;
+        let mut buf = vec![];
+        page.lookup_value(0, &mut buf, &mut db.disk)?;
         assert_eq!(buf, &[1, 2]);
 
         page.upsert_value(0, &[2, 3, 4, 5], &mut db)?;
 
-        let mut buf = &mut [0u8; 4];
-        page.lookup_value(0, buf, &mut db.disk)?;
+        page.lookup_value(0, &mut buf, &mut db.disk)?;
         assert_eq!(buf, &[2, 3, 4, 5]);
 
         Ok(())

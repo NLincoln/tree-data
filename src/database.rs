@@ -46,10 +46,6 @@ impl<D: Disk> Database<D> {
         Ok(Database { disk, meta })
     }
 
-    pub fn read_record(&mut self, table_id: u128) -> io::Result<()> {
-        unimplemented!();
-    }
-
     fn read_header(disk: &mut D) -> io::Result<DatabaseMeta> {
         disk.seek(SeekFrom::Start(0))?;
         let block_size_exp = disk.read_u64::<BigEndian>()?;
