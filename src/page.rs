@@ -192,7 +192,6 @@ mod btree_tests {
 
     #[test]
     fn btrees_can_have_a_little_test() -> io::Result<()> {
-        env_logger::builder().is_test(true).try_init().unwrap();
         let page_size = 2u64.pow(14);
         let mut db = Database::initialize(Cursor::new(vec![]))?;
         let mut tree = BTree::init_btree_structure(&mut db)?;
