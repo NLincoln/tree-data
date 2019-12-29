@@ -86,22 +86,13 @@ impl LeafPage {
         if self.keys.is_empty() {
             return false;
         }
-        let entries_sorted_by_offset = {
-            let mut keys = self.keys.clone();
-            keys.sort_by_key(|entry| entry.offset);
-            keys
+        let space_taken_up: u64 = self.keys.iter().map(|entry| entry.value_len).sum();
+        let space_in_page_for_data = {
+            let header_stop_offset = self.header_len() + LeafPageEntry::size_of_entry();
+            page_size - header_stop_offset
         };
-
-        // Header is the size of the existing entries, plus
-        // the size with the new entry added.
-        let mut last_entry_end_point = self.header_len() + LeafPageEntry::size_of_entry();
-        let mut total_space_found = 0;
-        for entry in entries_sorted_by_offset {
-            let len_of_this_slice = entry.offset - last_entry_end_point;
-            total_space_found += len_of_this_slice;
-            last_entry_end_point = entry.end_offset();
-        }
-        return total_space_found < LeafPage::max_size_per_element(page_size);
+        let space_available = space_in_page_for_data - space_taken_up;
+        return space_available < LeafPage::max_size_per_element(page_size);
     }
 
     pub(crate) fn lookup_value(
@@ -160,85 +151,62 @@ impl LeafPage {
         Ok(true)
     }
 
+    fn quick_insert<D: Disk>(
+        &mut self,
+        key: Key,
+        data: &[u8],
+        db: &mut Database<D>,
+        end_offset: Option<u64>,
+    ) -> io::Result<()> {
+        let page_size = db.block_size();
+        let disk = &mut db.disk;
+        let end_offset = end_offset.unwrap_or_else(|| {
+            self.keys
+                .iter()
+                .map(|entry| entry.offset)
+                .min()
+                .unwrap_or(page_size)
+        });
+        let entry = LeafPageEntry {
+            offset: end_offset - data.len() as u64,
+            key,
+            value_len: data.len() as u64,
+        };
+        disk.seek(SeekFrom::Start(self.offset + entry.offset))?;
+        disk.write_all(data)?;
+        match self.keys.binary_search_by_key(&key, |entry| entry.key) {
+            Ok(_) => unreachable!(),
+            Err(idx) => self.keys.insert(idx, entry),
+        }
+        self.persist_header(disk)?;
+        //            eprintln!("INSERT_COMMIT [offset={}][key={}]", page.offset, key);
+        return Ok(());
+    }
+
     pub(crate) fn upsert_value<D: Disk>(
         &mut self,
         key: Key,
         data: &[u8],
         db: &mut Database<D>,
     ) -> io::Result<()> {
+        if self.keys.iter().any(|entry| entry.key == key) {
+            self.delete_value(key, &mut db.disk)?;
+            return self.upsert_value(key, data, db);
+        }
+
         let page_size = db.block_size();
         let disk = &mut db.disk;
-        self.seek_to_offset(disk)?;
-        // I'm going to use the first-fit algorithm for this, since it's the easiest to
-        // implement.
-        fn push_entry(
-            page: &mut LeafPage,
-            disk: &mut impl Disk,
-            key: Key,
-            data: &[u8],
-            entry: LeafPageEntry,
-        ) -> io::Result<()> {
-            disk.seek(SeekFrom::Start(page.offset + entry.offset))?;
-            disk.write_all(data)?;
-            match page.keys.binary_search_by_key(&key, |entry| entry.key) {
-                Ok(_) => unreachable!(),
-                Err(idx) => page.keys.insert(idx, entry),
-            }
-            page.persist_header(disk)?;
-            //            eprintln!("INSERT_COMMIT [offset={}][key={}]", page.offset, key);
-            return Ok(());
+        let end_offset = self
+            .keys
+            .iter()
+            .map(|entry| entry.offset)
+            .min()
+            .unwrap_or(page_size);
+        let start_offset = self.header_len() + LeafPageEntry::size_of_entry();
+        if end_offset - start_offset <= data.len() as u64 {
+            unimplemented!();
         }
-
-        // First of all, if there are no entries yet, then the entire region is open.
-        // this is... a bit rare? Should only happen on the very first insert
-        // into a given table, but I suppose it's possible.
-        if self.keys.is_empty() {
-            return push_entry(
-                self,
-                disk,
-                key,
-                data,
-                LeafPageEntry {
-                    offset: page_size - data.len() as u64,
-                    key,
-                    value_len: data.len() as u64,
-                },
-            );
-        }
-
-        let entries_sorted_by_offset = {
-            let mut keys = self.keys.clone();
-            keys.sort_by_key(|entry| entry.offset);
-            keys
-        };
-
-        // Header is the size of the existing entries, plus
-        // the size with the new entry added.
-        let mut last_entry_end_point = self.header_len() + LeafPageEntry::size_of_entry();
-
-        for entry in entries_sorted_by_offset {
-            if key == entry.key {
-                self.delete_value(key, disk)?;
-                return self.upsert_value(key, data, db);
-            }
-            let len_of_this_slice = entry.offset - last_entry_end_point;
-            if len_of_this_slice >= data.len() as u64 {
-                // we have found a viable entry point!
-                return push_entry(
-                    self,
-                    disk,
-                    key,
-                    data,
-                    LeafPageEntry {
-                        offset: entry.offset - data.len() as u64,
-                        key,
-                        value_len: data.len() as u64,
-                    },
-                );
-            }
-            last_entry_end_point = entry.end_offset();
-        }
-        panic!("No entries found in page. Page may be fragmented or too full");
+        return self.quick_insert(key, data, db, Some(end_offset));
     }
     pub(crate) fn init<D: Disk>(db: &mut Database<D>) -> io::Result<LeafPage> {
         let page_size = db.block_size();
@@ -259,7 +227,7 @@ impl LeafPage {
         for entry in &self.keys[split_idx..] {
             let value = self.lookup_value(entry.key, &mut buf, &mut db.disk)?;
             value.expect("could not lookup value");
-            new_right_sibling.upsert_value(entry.key, &buf, db)?;
+            new_right_sibling.quick_insert(entry.key, &buf, db, None)?;
         }
         self.keys.truncate(split_idx);
         self.persist_header(&mut db.disk)?;

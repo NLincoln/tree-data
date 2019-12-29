@@ -8,14 +8,14 @@ pub struct BTree {
 }
 
 impl BTree {
-    pub fn init_btree_structure<D: Disk>(disk: &mut Database<D>) -> io::Result<BTree> {
+    pub fn init<D: Disk>(disk: &mut Database<D>) -> io::Result<BTree> {
         let root = LeafPage::init(disk)?;
         Ok(BTree {
             root: root.offset(),
         })
     }
 
-    pub fn btree_insert<D: Disk>(
+    pub fn insert<D: Disk>(
         &mut self,
         key: Key,
         data: &[u8],
@@ -157,10 +157,10 @@ mod btree_tests {
     #[test]
     fn btrees_can_have_a_little_test() -> io::Result<()> {
         let mut db = Database::initialize(Cursor::new(vec![]))?;
-        let mut tree = BTree::init_btree_structure(&mut db)?;
+        let mut tree = BTree::init(&mut db)?;
         let key = 1;
         let data = &[1, 2, 3, 4];
-        tree.btree_insert(key, data, &mut db)?;
+        tree.insert(key, data, &mut db)?;
         assert_eq!(&tree.lookup(key, &mut db)?.unwrap(), data);
         let mut data = vec![0];
         for i in 1..128 {
@@ -169,7 +169,7 @@ mod btree_tests {
         for key in 1..8_000 {
             data[0] = (key % 40) as u8;
             eprintln!("INSERT [{}]", key);
-            tree.btree_insert(key, &data, &mut db)?;
+            tree.insert(key, &data, &mut db)?;
             eprintln!("LOOKUP [{}]", key);
 
             match tree.lookup(key, &mut db)? {
