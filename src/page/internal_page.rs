@@ -47,6 +47,11 @@ impl InternalPage {
         safe_insert(&mut self.pointers, i + 1, pointer);
         self.persist(db)
     }
+    pub fn safe_remove<D: Disk>(&mut self, i: usize, db: &mut Database<D>) -> io::Result<()> {
+        self.keys.remove(i);
+        self.pointers.remove(i + 1);
+        self.persist(db)
+    }
     fn max_children_capacity(page_size: u64) -> u64 {
         // Solve[pageSize==head+n*childSize+(n-1)*keySize,n]
         let head_size = Self::header_size();
@@ -88,6 +93,33 @@ impl InternalPage {
         new_right_sibling.persist(db)?;
         self.persist(db)?;
         Ok((new_right_sibling, key))
+    }
+    pub fn delete_value<D: Disk>(&mut self, key: Key, db: &mut Database<D>) -> io::Result<()> {
+        let i = match self.keys.binary_search(&key) {
+            Ok(val) => val,
+            Err(val) => val,
+        };
+        eprintln!("INTERNAL_DELETE_VALUE [i={}][ptr={}]", i, self.pointer(i));
+        let mut child = Page::load(self.pointer(i), db)?;
+        match child {
+            Page::Leaf(mut leaf) => {
+                eprintln!("DELETE_LEAF_VALUE");
+                leaf.delete_value(key, &mut db.disk)?;
+                if leaf.keys().is_empty() {
+                    let idx_to_remove = if i == 0 { 0 } else { i - 1 };
+                    self.safe_remove(idx_to_remove, db)?;
+                }
+            }
+            Page::Internal(mut internal) => {
+                internal.delete_value(key, db)?;
+                if internal.keys.is_empty() {
+                    self.pointers[i] = internal.pointer(0);
+                    self.persist(db)?;
+                }
+            }
+        }
+
+        Ok(())
     }
     pub fn load<D: Disk>(db: &mut Database<D>) -> io::Result<InternalPage> {
         let disk = &mut db.disk;

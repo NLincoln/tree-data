@@ -120,10 +120,10 @@ impl BTree {
     ) -> io::Result<Option<Vec<u8>>> {
         match page {
             Page::Internal(page) => {
-                let mut i = 0;
-                while i < page.keys().len() && key > page.keys()[i] {
-                    i += 1;
-                }
+                let i = match page.keys().binary_search(&key) {
+                    Ok(num) => num,
+                    Err(num) => num,
+                };
                 //                eprintln!(
                 //                    "LOOKUP_RECUR [offset={}][i={}][page.pointers[i]={}]",
                 //                    page.offset(),
@@ -146,6 +146,21 @@ impl BTree {
     ) -> io::Result<Option<Vec<u8>>> {
         let page = Page::load(self.root, db)?;
         return self.btree_search(page, key, db);
+    }
+    pub fn delete<D: Disk>(&mut self, key: Key, db: &mut Database<D>) -> io::Result<()> {
+        let root = Page::load(self.root, db)?;
+        match root {
+            Page::Leaf(mut leaf) => {
+                leaf.delete_value(key, &mut db.disk)?;
+            }
+            Page::Internal(mut internal) => {
+                internal.delete_value(key, db)?;
+                if internal.keys().is_empty() {
+                    self.root = internal.pointer(0);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -176,6 +191,14 @@ mod btree_tests {
                 Some(found) => assert_eq!(found, data),
                 None => panic!("Failed to lookup key {}", key),
             };
+        }
+        for key in 10..8_000 {
+            eprintln!("DELETE [{}]", key);
+            tree.delete(key, &mut db)?;
+            match tree.lookup(key, &mut db)? {
+                Some(_) => panic!("Key was not actually deleted {}", key),
+                None => {}
+            }
         }
         Ok(())
     }

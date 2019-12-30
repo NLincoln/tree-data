@@ -25,8 +25,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("btree_insert 1,000", |b| {
         b.iter(|| btree_insert_n(1_000));
     });
-    //    c.bench_function("btree_insert 10,000", |b| {
-    //        b.iter(|| btree_insert_n(10_000));
+    c.bench_function("btree_insert 10,000", |b| {
+        b.iter(|| btree_insert_n(10_000));
+    });
+    //    c.bench_function("btree_insert 100,000", |b| {
+    //        b.iter(|| btree_insert_n(100_000));
     //    });
 }
 

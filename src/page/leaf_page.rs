@@ -48,10 +48,16 @@ impl LeafPage {
         Ok(())
     }
     pub(crate) fn persist_header(&self, disk: &mut impl Disk) -> io::Result<()> {
+        self.persist_header_offset(disk, 0)
+    }
+    fn persist_header_offset(&self, disk: &mut impl Disk, offset: usize) -> io::Result<()> {
         self.seek_to_offset(disk)?;
         disk.write_u8(Page::LEAF_TAG)?;
         disk.write_u64::<BigEndian>(self.keys.len() as u64)?;
-        for entry in self.keys.iter() {
+        disk.seek(SeekFrom::Current(
+            (offset as u64 * LeafPageEntry::size_of_entry()) as i64,
+        ))?;
+        for entry in self.keys.iter().skip(offset) {
             disk.write_u128::<BigEndian>(entry.key)?;
             disk.write_u64::<BigEndian>(entry.offset)?;
             disk.write_u64::<BigEndian>(entry.value_len)?;
@@ -176,9 +182,11 @@ impl LeafPage {
         disk.write_all(data)?;
         match self.keys.binary_search_by_key(&key, |entry| entry.key) {
             Ok(_) => unreachable!(),
-            Err(idx) => self.keys.insert(idx, entry),
+            Err(idx) => {
+                self.keys.insert(idx, entry);
+                self.persist_header_offset(disk, idx)?;
+            }
         }
-        self.persist_header(disk)?;
         //            eprintln!("INSERT_COMMIT [offset={}][key={}]", page.offset, key);
         return Ok(());
     }
