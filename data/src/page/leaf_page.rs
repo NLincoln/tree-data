@@ -15,9 +15,6 @@ pub struct LeafPageEntry {
 }
 
 impl LeafPageEntry {
-    fn end_offset(&self) -> PageOffset {
-        self.offset + self.value_len
-    }
     const fn size_of_entry() -> u64 {
         // this function is const, so it doesn't
         // really matter what work we do here
@@ -203,7 +200,6 @@ impl LeafPage {
         }
 
         let page_size = db.block_size();
-        let disk = &mut db.disk;
         let end_offset = self
             .keys
             .iter()

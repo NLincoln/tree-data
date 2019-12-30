@@ -1,0 +1,11 @@
+[package]
+name = "btree-fuzzer"
+version = "0.1.0"
+authors = ["Nathan <lincolnnathan205@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+data = { path = "../data" }
+rand = "0.7.2"

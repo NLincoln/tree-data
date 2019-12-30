@@ -100,7 +100,7 @@ impl InternalPage {
             Err(val) => val,
         };
         eprintln!("INTERNAL_DELETE_VALUE [i={}][ptr={}]", i, self.pointer(i));
-        let mut child = Page::load(self.pointer(i), db)?;
+        let child = Page::load(self.pointer(i), db)?;
         match child {
             Page::Leaf(mut leaf) => {
                 eprintln!("DELETE_LEAF_VALUE");
