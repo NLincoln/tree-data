@@ -48,10 +48,10 @@ impl Page {
         };
         Ok(page)
     }
-    fn is_full(&self, page_size: u64) -> bool {
+    fn can_accommodate(&self, data_len: u64, page_size: u64) -> bool {
         match self {
-            Page::Internal(internal) => internal.is_full(page_size),
-            Page::Leaf(leaf) => leaf.is_full(page_size),
+            Page::Internal(internal) => internal.can_accommodate(page_size),
+            Page::Leaf(leaf) => leaf.can_accommodate(data_len, page_size),
         }
     }
 }

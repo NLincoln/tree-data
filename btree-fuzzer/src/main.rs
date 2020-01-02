@@ -62,6 +62,7 @@ fn generate_instruction(reference: &HashMap<Key, Data>) -> Instruction {
 }
 
 fn main() -> io::Result<()> {
+    env_logger::init();
     use std::io::Cursor;
     let mut db = Database::initialize(Cursor::new(vec![])).unwrap();
     let mut tree = BTree::init(&mut db).unwrap();

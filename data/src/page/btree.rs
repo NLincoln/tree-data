@@ -22,15 +22,15 @@ impl BTree {
         db: &mut Database<D>,
     ) -> io::Result<()> {
         let root = Page::load(self.root, db)?;
-        if root.is_full(db.block_size()) {
-            //            eprintln!("ROOT_FULL [{}]", self.root);
+        if root.can_accommodate(data.len() as u64, db.block_size()) {
+            self.btree_insert_nonfull(root, key, data, db)?;
+        } else {
+            log::debug!("ROOT_FULL [root={}]", self.root);
             let mut page = InternalPage::init(db, self.root)?;
             self.root = page.offset();
-            //            eprintln!("NEW_ROOT_OFFSET [{}]", page.offset());
+            log::debug!("NEW_ROOT_OFFSET [offset={}]", page.offset());
             self.btree_split_child(&mut page, 0, db)?;
             self.btree_insert_nonfull(page.into(), key, data, db)?;
-        } else {
-            self.btree_insert_nonfull(root, key, data, db)?;
         }
         Ok(())
     }
@@ -47,29 +47,28 @@ impl BTree {
                 page.upsert_value(key, data, db)?;
             }
             Page::Internal(mut page) => {
-                let mut i = page.keys().len() - 1;
-                while key < page.key(i) {
-                    i -= 1;
-                }
-                i += 1;
+                let mut i = match page.keys().binary_search(&key) {
+                    Ok(val) => val,
+                    Err(val) => val,
+                };
                 let child = Page::load(page.pointer(i), db)?;
-                //                eprintln!(
-                //                    "INSERT_NONFULL_INTERNAL [offset={}][i={}][child.offset={}]",
-                //                    page.offset(),
-                //                    i,
-                //                    page.pointer(i)
-                //                );
-                let child = if child.is_full(db.block_size()) {
-                    //                    eprintln!("SPLIT_NONROOT [i={}][page.offset={}]", i, page.offset());
+                log::debug!(
+                    "INSERT_NONFULL_INTERNAL [offset={}][i={}][child.offset={}]",
+                    page.offset(),
+                    i,
+                    page.pointer(i)
+                );
+                let child = if child.can_accommodate(data.len() as u64, db.block_size()) {
+                    child
+                } else {
+                    log::debug!("SPLIT_NONROOT [i={}][page.offset={}]", i, page.offset());
                     self.btree_split_child(&mut page, i, db)?;
                     if key > page.key(i) {
                         i += 1;
                         Page::load(page.pointer(i), db)?
                     } else {
-                        child
+                        Page::load(page.pointer(i), db)?
                     }
-                } else {
-                    child
                 };
                 self.btree_insert_nonfull(child, key, data, db)?;
             }
@@ -86,11 +85,11 @@ impl BTree {
         let left_sibling = Page::load(node.pointer(insert_idx), db)?;
         match left_sibling {
             Page::Leaf(mut left_sibling) => {
-                //                eprintln!(
-                //                    "SPLIT_LEAF [offset={}][keys_len={}]",
-                //                    left_sibling.offset(),
-                //                    left_sibling.keys().len()
-                //                );
+                log::debug!(
+                    "SPLIT_LEAF [offset={}][keys_len={}]",
+                    left_sibling.offset(),
+                    left_sibling.keys().len()
+                );
                 let new_right_sibling = left_sibling.split_in_half(db)?;
                 node.safe_insert(
                     insert_idx,
@@ -98,10 +97,10 @@ impl BTree {
                     new_right_sibling.offset(),
                     db,
                 )?;
-                //                eprintln!(
-                //                    "SPLIT_LEAF_END [new_sibling={}]",
-                //                    new_right_sibling.offset()
-                //                );
+                log::debug!(
+                    "SPLIT_LEAF_END [new_sibling={}]",
+                    new_right_sibling.offset()
+                );
             }
             Page::Internal(mut left_sibling) => {
                 let (new_right_sibling, key) = left_sibling.split_in_half(db)?;

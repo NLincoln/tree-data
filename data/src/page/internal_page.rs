@@ -59,8 +59,8 @@ impl InternalPage {
         let key_size = size_of::<Key>() as u64;
         (page_size + key_size - head_size) / (child_ptr_size + key_size)
     }
-    pub fn is_full(&self, page_size: u64) -> bool {
-        self.pointers.len() as u64 >= InternalPage::max_children_capacity(page_size)
+    pub fn can_accommodate(&self, page_size: u64) -> bool {
+        (self.pointers.len() as u64) < InternalPage::max_children_capacity(page_size)
     }
     fn header_size() -> u64 {
         size_of::<u8>() as u64 + size_of::<u64>() as u64
@@ -99,11 +99,11 @@ impl InternalPage {
             Ok(val) => val,
             Err(val) => val,
         };
-        eprintln!("INTERNAL_DELETE_VALUE [i={}][ptr={}]", i, self.pointer(i));
+        log::debug!("INTERNAL_DELETE_VALUE [i={}][ptr={}]", i, self.pointer(i));
         let child = Page::load(self.pointer(i), db)?;
         match child {
             Page::Leaf(mut leaf) => {
-                eprintln!("DELETE_LEAF_VALUE");
+                log::debug!("DELETE_LEAF_VALUE");
                 leaf.delete_value(key, &mut db.disk)?;
                 if leaf.keys().is_empty() {
                     let idx_to_remove = if i == 0 { 0 } else { i - 1 };

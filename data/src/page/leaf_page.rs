@@ -30,10 +30,6 @@ pub struct LeafPage {
 }
 
 impl LeafPage {
-    const DESIRED_FANOUT: u64 = 8;
-    fn max_size_per_element(page_size: u64) -> u64 {
-        page_size / Self::DESIRED_FANOUT
-    }
     pub fn offset(&self) -> u64 {
         self.offset
     }
@@ -45,6 +41,11 @@ impl LeafPage {
         Ok(())
     }
     pub(crate) fn persist_header(&self, disk: &mut impl Disk) -> io::Result<()> {
+        log::debug!(
+            "PERSIST_HEADER [offset={}][keys_len={}]",
+            self.offset,
+            self.keys.len()
+        );
         self.persist_header_offset(disk, 0)
     }
     fn persist_header_offset(&self, disk: &mut impl Disk, offset: usize) -> io::Result<()> {
@@ -85,17 +86,17 @@ impl LeafPage {
             + size_of::<u8>() as u64
     }
 
-    pub fn is_full(&self, page_size: u64) -> bool {
+    pub fn can_accommodate(&self, data_len: u64, page_size: u64) -> bool {
         if self.keys.is_empty() {
-            return false;
+            return true;
         }
         let space_taken_up: u64 = self.keys.iter().map(|entry| entry.value_len).sum();
         let space_in_page_for_data = {
-            let header_stop_offset = self.header_len() + LeafPageEntry::size_of_entry();
+            let header_stop_offset = self.header_len();
             page_size - header_stop_offset
         };
         let space_available = space_in_page_for_data - space_taken_up;
-        return space_available < LeafPage::max_size_per_element(page_size);
+        return space_available >= data_len + LeafPageEntry::size_of_entry();
     }
 
     pub(crate) fn lookup_value(
@@ -181,11 +182,30 @@ impl LeafPage {
             Ok(_) => unreachable!(),
             Err(idx) => {
                 self.keys.insert(idx, entry);
-                self.persist_header_offset(disk, idx)?;
+                self.persist_header(disk)?;
             }
         }
-        //            eprintln!("INSERT_COMMIT [offset={}][key={}]", page.offset, key);
+        log::debug!("INSERT_COMMIT [offset={}][key={}]", self.offset, key);
         return Ok(());
+    }
+
+    fn defragment<D: Disk>(&mut self, db: &mut Database<D>) -> io::Result<()> {
+        log::debug!("DEFRAGMENT");
+        let pairs = self
+            .keys
+            .iter()
+            .map(|entry| {
+                Ok((
+                    entry.key,
+                    self.lookup_value_alloc(entry.key, &mut db.disk)?.unwrap(),
+                ))
+            })
+            .collect::<io::Result<Vec<(Key, Vec<u8>)>>>()?;
+        self.keys.clear();
+        for (key, value) in pairs {
+            self.upsert_value(key, &value, db)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn upsert_value<D: Disk>(
@@ -194,12 +214,19 @@ impl LeafPage {
         data: &[u8],
         db: &mut Database<D>,
     ) -> io::Result<()> {
+        log::debug!(
+            "LEAF_UPSERT_BEGIN [offset={}][key={}][keys_len={}]",
+            self.offset,
+            key,
+            self.keys.len()
+        );
         if self.keys.iter().any(|entry| entry.key == key) {
             self.delete_value(key, &mut db.disk)?;
             return self.upsert_value(key, data, db);
         }
 
         let page_size = db.block_size();
+        assert!(self.can_accommodate(data.len() as u64, page_size));
         let end_offset = self
             .keys
             .iter()
@@ -207,8 +234,9 @@ impl LeafPage {
             .min()
             .unwrap_or(page_size);
         let start_offset = self.header_len() + LeafPageEntry::size_of_entry();
-        if end_offset - start_offset <= data.len() as u64 {
-            unimplemented!();
+        if start_offset > end_offset || (end_offset - start_offset < data.len() as u64) {
+            self.defragment(db)?;
+            return self.upsert_value(key, data, db);
         }
         return self.quick_insert(key, data, db, Some(end_offset));
     }
@@ -225,16 +253,24 @@ impl LeafPage {
         })
     }
     pub fn split_in_half<D: Disk>(&mut self, db: &mut Database<D>) -> io::Result<LeafPage> {
-        let split_idx = self.keys().len() / 2;
+        let keys_len = self.keys.len();
+        let split_idx = keys_len / 2;
         let mut new_right_sibling = LeafPage::init(db)?;
         let mut buf = vec![];
         for entry in &self.keys[split_idx..] {
             let value = self.lookup_value(entry.key, &mut buf, &mut db.disk)?;
             value.expect("could not lookup value");
-            new_right_sibling.quick_insert(entry.key, &buf, db, None)?;
+            new_right_sibling.upsert_value(entry.key, &buf, db)?;
         }
         self.keys.truncate(split_idx);
         self.persist_header(&mut db.disk)?;
+        log::debug!(
+            "SPLIT_IN_HALF [offset={}][split_idx={}][old_len={}][new_len={}]",
+            self.offset,
+            split_idx,
+            keys_len,
+            self.keys.len()
+        );
         Ok(new_right_sibling)
     }
 }
@@ -266,7 +302,6 @@ mod tests_leafpage {
     fn test_upsert() -> io::Result<()> {
         let mut db = Database::initialize(Cursor::new(vec![]))?;
         let mut page = LeafPage::init(&mut db)?;
-        db.disk.seek(SeekFrom::Start(0))?;
         page.upsert_value(0, &[0, 1, 2, 3], &mut db)?;
         page.upsert_value(0, &[1, 2], &mut db)?;
 
@@ -278,6 +313,24 @@ mod tests_leafpage {
 
         page.lookup_value(0, &mut buf, &mut db.disk)?;
         assert_eq!(buf, &[2, 3, 4, 5]);
+
+        Ok(())
+    }
+    #[test]
+    fn test_split() -> io::Result<()> {
+        let mut db = Database::initialize(Cursor::new(vec![]))?;
+        let mut page = LeafPage::init(&mut db)?;
+        for i in 0..100 {
+            page.upsert_value(i, &[0, 1, 2, 3], &mut db)?;
+        }
+        let new_right_sibling = page.split_in_half(&mut db)?;
+        db.disk.seek(SeekFrom::Start(page.offset))?;
+        let page = LeafPage::read_header(&mut db.disk)?;
+        assert_eq!(page.keys.len(), 50);
+
+        db.disk.seek(SeekFrom::Start(new_right_sibling.offset))?;
+        let new_right_sibling = LeafPage::read_header(&mut db.disk)?;
+        assert_eq!(new_right_sibling.keys.len(), 50);
 
         Ok(())
     }
