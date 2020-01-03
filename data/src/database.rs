@@ -104,10 +104,6 @@ mod tests {
 
     #[test]
     fn insert_and_retrieve() -> io::Result<()> {
-        let table_id = 0u128;
-        let id = 1;
-        let data = &[0, 1, 2, 3];
-        let mut db = database();
         Ok(())
     }
 }

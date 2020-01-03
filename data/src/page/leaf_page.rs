@@ -123,15 +123,8 @@ impl LeafPage {
         key: Key,
         disk: &mut impl Disk,
     ) -> io::Result<Option<Vec<u8>>> {
-        let entry = self.keys.iter().find(|entry| entry.key == key);
-        let entry = match entry {
-            Some(entry) => entry,
-            None => return Ok(None),
-        };
-        let mut data = vec![0u8; entry.value_len as usize];
-        disk.seek(SeekFrom::Start(self.offset + entry.offset))?;
-        disk.read_exact(&mut data)?;
-        return Ok(Some(data));
+        let mut buf = vec![];
+        Ok(self.lookup_value(key, &mut buf, disk)?.map(move |_| buf))
     }
 
     pub(crate) fn delete_value(&mut self, key: Key, disk: &mut impl Disk) -> io::Result<bool> {
@@ -182,7 +175,7 @@ impl LeafPage {
             Ok(_) => unreachable!(),
             Err(idx) => {
                 self.keys.insert(idx, entry);
-                self.persist_header(disk)?;
+                self.persist_header_offset(disk, idx)?;
             }
         }
         log::debug!("INSERT_COMMIT [offset={}][key={}]", self.offset, key);
@@ -203,7 +196,7 @@ impl LeafPage {
             .collect::<io::Result<Vec<(Key, Vec<u8>)>>>()?;
         self.keys.clear();
         for (key, value) in pairs {
-            self.upsert_value(key, &value, db)?;
+            self.quick_insert(key, &value, db, None)?;
         }
         Ok(())
     }
@@ -260,7 +253,7 @@ impl LeafPage {
         for entry in &self.keys[split_idx..] {
             let value = self.lookup_value(entry.key, &mut buf, &mut db.disk)?;
             value.expect("could not lookup value");
-            new_right_sibling.upsert_value(entry.key, &buf, db)?;
+            new_right_sibling.quick_insert(entry.key, &buf, db, None)?;
         }
         self.keys.truncate(split_idx);
         self.persist_header(&mut db.disk)?;

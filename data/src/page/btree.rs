@@ -47,7 +47,7 @@ impl BTree {
                 page.upsert_value(key, data, db)?;
             }
             Page::Internal(mut page) => {
-                let mut i = match page.keys().binary_search(&key) {
+                let i = match page.keys().binary_search(&key) {
                     Ok(val) => val,
                     Err(val) => val,
                 };
@@ -62,12 +62,11 @@ impl BTree {
                     child
                 } else {
                     log::debug!("SPLIT_NONROOT [i={}][page.offset={}]", i, page.offset());
-                    self.btree_split_child(&mut page, i, db)?;
+                    let (left_child, right_child) = self.btree_split_child(&mut page, i, db)?;
                     if key > page.key(i) {
-                        i += 1;
-                        Page::load(page.pointer(i), db)?
+                        right_child
                     } else {
-                        Page::load(page.pointer(i), db)?
+                        left_child
                     }
                 };
                 self.btree_insert_nonfull(child, key, data, db)?;
@@ -81,7 +80,7 @@ impl BTree {
         node: &mut InternalPage,
         insert_idx: usize,
         db: &mut Database<D>,
-    ) -> io::Result<()> {
+    ) -> io::Result<(Page, Page)> {
         let left_sibling = Page::load(node.pointer(insert_idx), db)?;
         match left_sibling {
             Page::Leaf(mut left_sibling) => {
@@ -101,14 +100,14 @@ impl BTree {
                     "SPLIT_LEAF_END [new_sibling={}]",
                     new_right_sibling.offset()
                 );
+                Ok((left_sibling.into(), new_right_sibling.into()))
             }
             Page::Internal(mut left_sibling) => {
                 let (new_right_sibling, key) = left_sibling.split_in_half(db)?;
                 node.safe_insert(insert_idx, key, new_right_sibling.offset(), db)?;
+                Ok((left_sibling.into(), new_right_sibling.into()))
             }
-        };
-
-        Ok(())
+        }
     }
 
     fn btree_search<D: Disk>(
