@@ -12,7 +12,7 @@ use internal_page::InternalPage;
 use leaf_page::LeafPage;
 
 type PageOffset = u64;
-type Key = u128;
+use crate::Key;
 
 enum Page {
     Internal(InternalPage),

@@ -8,6 +8,12 @@ pub struct BTree {
 }
 
 impl BTree {
+    pub fn offset(&self) -> PageOffset {
+        self.root
+    }
+    pub fn from_offset(offset: PageOffset) -> BTree {
+        Self { root: offset }
+    }
     pub fn init<D: Disk>(disk: &mut Database<D>) -> io::Result<BTree> {
         let root = LeafPage::init(disk)?;
         Ok(BTree {
@@ -111,7 +117,7 @@ impl BTree {
     }
 
     fn btree_search<D: Disk>(
-        &mut self,
+        &self,
         page: Page,
         key: Key,
         db: &mut Database<D>,
@@ -137,11 +143,7 @@ impl BTree {
             }
         }
     }
-    pub fn lookup<D: Disk>(
-        &mut self,
-        key: Key,
-        db: &mut Database<D>,
-    ) -> io::Result<Option<Vec<u8>>> {
+    pub fn lookup<D: Disk>(&self, key: Key, db: &mut Database<D>) -> io::Result<Option<Vec<u8>>> {
         let page = Page::load(self.root, db)?;
         return self.btree_search(page, key, db);
     }

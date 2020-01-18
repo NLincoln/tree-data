@@ -1,3 +1,5 @@
+use crate::tree::TreeEntry;
+use crate::{BTree, Key};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::convert::TryInto;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -18,6 +20,7 @@ pub struct Database<D: Disk> {
 struct DatabaseMeta {
     block_size_exp: u64,
     num_blocks_allocated: u64,
+    root_btree_offset: u64,
 }
 
 impl DatabaseMeta {
@@ -28,6 +31,7 @@ impl DatabaseMeta {
         disk.seek(SeekFrom::Start(0))?;
         disk.write_u64::<BigEndian>(self.block_size_exp)?;
         disk.write_u64::<BigEndian>(self.num_blocks_allocated)?;
+        disk.write_u64::<BigEndian>(self.root_btree_offset)?;
         Ok(())
     }
 }
@@ -50,9 +54,11 @@ impl<D: Disk> Database<D> {
         disk.seek(SeekFrom::Start(0))?;
         let block_size_exp = disk.read_u64::<BigEndian>()?;
         let num_blocks_allocated = disk.read_u64::<BigEndian>()?;
+        let root_btree_offset = disk.read_u64::<BigEndian>()?;
         Ok(DatabaseMeta {
             block_size_exp,
             num_blocks_allocated,
+            root_btree_offset,
         })
     }
 
@@ -61,12 +67,24 @@ impl<D: Disk> Database<D> {
         let block_size_exp = 13u64;
         // 1 for the meta block
         let num_blocks_allocated = 1u64;
+        // init to 0: we lazily allocate
+        let root_btree_offset = 0u64;
         let meta = DatabaseMeta {
             block_size_exp,
             num_blocks_allocated,
+            root_btree_offset,
         };
         meta.persist(disk)?;
         Ok(meta)
+    }
+
+    pub fn get(&mut self, key: Key) -> io::Result<TreeEntry<'_, D>> {
+        if self.meta.root_btree_offset == 0 {
+            self.meta.root_btree_offset = BTree::init(self)?.offset()
+        }
+        let offset = self.meta.root_btree_offset;
+
+        Ok(TreeEntry { db: self, offset })
     }
 }
 
