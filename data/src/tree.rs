@@ -8,7 +8,7 @@ pub struct TreeEntry<'d, D: Disk> {
 }
 
 fn read_be_u64(input: &[u8]) -> u64 {
-    let (int_bytes, rest) = input.split_at(std::mem::size_of::<u64>());
+    let (int_bytes, _) = input.split_at(std::mem::size_of::<u64>());
     u64::from_be_bytes(int_bytes.try_into().unwrap())
 }
 
@@ -51,6 +51,11 @@ impl<'d, D: Disk> TreeEntry<'d, D> {
             data
         }))
     }
+    /// Iterate over all the keys in this layer of the tree
+    pub fn keys<'s>(&'s mut self) -> io::Result<impl Iterator<Item = io::Result<Key>> + 's> {
+        let tree = BTree::from_offset(self.offset);
+        tree.keys(self.db)
+    }
 }
 
 #[test]
@@ -62,10 +67,16 @@ fn test_tree() -> io::Result<()> {
     let expected_value = &[1, 2, 3, 4];
 
     let user_id = 40;
-    db.get(USERS)?
+    db.lookup()?
+        .get(USERS)?
         .get(user_id)?
         .set_value(USERNAME, expected_value)?;
-    let value = db.get(USERS)?.get(user_id)?.value(USERNAME)?.unwrap();
+    let value = db
+        .lookup()?
+        .get(USERS)?
+        .get(user_id)?
+        .value(USERNAME)?
+        .unwrap();
     assert_eq!(value.as_slice(), expected_value);
     Ok(())
 }
@@ -80,11 +91,15 @@ fn cannot_mix_children_and_values() {
     let expected_value = &[1, 2, 3, 4];
 
     let user_id = 40;
-    db.get(USERS)
+    db.lookup()
+        .unwrap()
+        .get(USERS)
         .unwrap()
         .set_value(user_id, expected_value)
         .unwrap();
-    db.get(USERS)
+    db.lookup()
+        .unwrap()
+        .get(USERS)
         .unwrap()
         .get(user_id)
         .unwrap()

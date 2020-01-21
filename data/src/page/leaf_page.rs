@@ -26,6 +26,7 @@ impl LeafPageEntry {
 
 pub struct LeafPage {
     offset: u64,
+    next_leaf_offset: PageOffset,
     keys: Vec<LeafPageEntry>,
 }
 
@@ -51,6 +52,7 @@ impl LeafPage {
     fn persist_header_offset(&self, disk: &mut impl Disk, offset: usize) -> io::Result<()> {
         self.seek_to_offset(disk)?;
         disk.write_u8(Page::LEAF_TAG)?;
+        disk.write_u64::<BigEndian>(self.next_leaf_offset)?;
         disk.write_u64::<BigEndian>(self.keys.len() as u64)?;
         disk.seek(SeekFrom::Current(
             (offset as u64 * LeafPageEntry::size_of_entry()) as i64,
@@ -65,6 +67,7 @@ impl LeafPage {
     pub(crate) fn read_header(disk: &mut impl Disk) -> io::Result<LeafPage> {
         let offset = disk.seek(SeekFrom::Current(0))?;
         assert_eq!(disk.read_u8()?, Page::LEAF_TAG);
+        let next_leaf_offset = disk.read_u64::<BigEndian>()?;
         let len = disk.read_u64::<BigEndian>()?;
         let mut buf = Vec::with_capacity(len as usize);
         for _ in 0..len {
@@ -77,7 +80,11 @@ impl LeafPage {
                 value_len,
             });
         }
-        Ok(LeafPage { offset, keys: buf })
+        Ok(LeafPage {
+            offset,
+            next_leaf_offset,
+            keys: buf,
+        })
     }
 
     fn header_len(&self) -> u64 {
@@ -242,6 +249,7 @@ impl LeafPage {
         db.write(offset, &buf)?;
         Ok(LeafPage {
             offset,
+            next_leaf_offset: 0,
             keys: vec![],
         })
     }
@@ -249,6 +257,9 @@ impl LeafPage {
         let keys_len = self.keys.len();
         let split_idx = keys_len / 2;
         let mut new_right_sibling = LeafPage::init(db)?;
+        new_right_sibling.next_leaf_offset = self.next_leaf_offset;
+        self.next_leaf_offset = new_right_sibling.offset;
+
         let mut buf = vec![];
         for entry in &self.keys[split_idx..] {
             let value = self.lookup_value(entry.key, &mut buf, &mut db.disk)?;
@@ -257,6 +268,7 @@ impl LeafPage {
         }
         self.keys.truncate(split_idx);
         self.persist_header(&mut db.disk)?;
+        new_right_sibling.persist_header(&mut db.disk)?;
         log::debug!(
             "SPLIT_IN_HALF [offset={}][split_idx={}][old_len={}][new_len={}]",
             self.offset,
@@ -265,6 +277,15 @@ impl LeafPage {
             self.keys.len()
         );
         Ok(new_right_sibling)
+    }
+    pub fn next_leaf<D: Disk>(&self, db: &mut Database<D>) -> io::Result<Option<LeafPage>> {
+        if self.next_leaf_offset == 0 {
+            log::info!("next_leaf: no more leaves");
+            return Ok(None);
+        }
+        log::info!("next_leaf: {}", self.next_leaf_offset);
+        db.disk.seek(SeekFrom::Start(self.next_leaf_offset))?;
+        Ok(Some(LeafPage::read_header(&mut db.disk)?))
     }
 }
 

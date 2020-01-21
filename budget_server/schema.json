@@ -1,0 +1,11 @@
+{
+  "tables": {
+    "expense": {
+      "uuid": {
+        "pk": true,
+        "type": "uuid"
+      },
+      "amount": "i64"
+    }
+  }
+}

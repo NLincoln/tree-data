@@ -1,2 +1,3 @@
 [workspace]
-members = ["data", "btree-fuzzer"]
+members = ["data", "btree-fuzzer", "budget_server"]
+default-members = ["budget_server"]

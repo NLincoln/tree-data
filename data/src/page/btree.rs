@@ -128,19 +128,10 @@ impl BTree {
                     Ok(num) => num,
                     Err(num) => num,
                 };
-                //                eprintln!(
-                //                    "LOOKUP_RECUR [offset={}][i={}][page.pointers[i]={}]",
-                //                    page.offset(),
-                //                    i,
-                //                    page.pointers()[i]
-                //                );
                 let child = Page::load(page.pointers()[i], db)?;
                 self.btree_search(child, key, db)
             }
-            Page::Leaf(page) => {
-                //                eprintln!("LOOKUP_RECUR_LEAF [offset={}]", page.offset());
-                page.lookup_value_alloc(key, &mut db.disk)
-            }
+            Page::Leaf(page) => page.lookup_value_alloc(key, &mut db.disk),
         }
     }
     pub fn lookup<D: Disk>(&self, key: Key, db: &mut Database<D>) -> io::Result<Option<Vec<u8>>> {
@@ -161,6 +152,51 @@ impl BTree {
             }
         }
         Ok(())
+    }
+    pub fn keys<'d, D: Disk>(
+        &self,
+        db: &'d mut Database<D>,
+    ) -> io::Result<impl Iterator<Item = io::Result<Key>> + 'd> {
+        let mut page = Page::load(self.root, db)?;
+        // navigate until we find the leftmost page
+        let leaf_page = loop {
+            match page {
+                Page::Internal(internal) => {
+                    page = Page::load(internal.pointer(0), db)?;
+                }
+                Page::Leaf(leaf_page) => break leaf_page,
+            }
+        };
+        struct KeyIter<'d, D: Disk> {
+            db: &'d mut Database<D>,
+            leaf_page: LeafPage,
+            current_key_offset: usize,
+        }
+        impl<'d, D: Disk> Iterator for KeyIter<'d, D> {
+            type Item = io::Result<Key>;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.current_key_offset == self.leaf_page.keys().len() {
+                    log::info!("key_iter: reached end of page");
+                    self.current_key_offset = 0;
+                    match self.leaf_page.next_leaf(self.db) {
+                        Ok(Some(page)) => {
+                            self.leaf_page = page;
+                        }
+                        Ok(None) => return None,
+                        Err(err) => return Some(Err(err)),
+                    }
+                }
+                let key = self.leaf_page.keys()[self.current_key_offset].key;
+                log::info!("key_iter: found key {}", key);
+                self.current_key_offset += 1;
+                Some(Ok(key))
+            }
+        }
+        return Ok(KeyIter {
+            db,
+            leaf_page,
+            current_key_offset: 0,
+        });
     }
 }
 

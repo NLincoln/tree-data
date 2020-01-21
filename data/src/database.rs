@@ -1,5 +1,5 @@
 use crate::tree::TreeEntry;
-use crate::{BTree, Key};
+use crate::BTree;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::convert::TryInto;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -78,9 +78,11 @@ impl<D: Disk> Database<D> {
         Ok(meta)
     }
 
-    pub fn get(&mut self, key: Key) -> io::Result<TreeEntry<'_, D>> {
+    pub fn lookup(&mut self) -> io::Result<TreeEntry<'_, D>> {
         if self.meta.root_btree_offset == 0 {
-            self.meta.root_btree_offset = BTree::init(self)?.offset()
+            self.meta.root_btree_offset = BTree::init(self)?.offset();
+            self.disk.seek(SeekFrom::Start(0))?;
+            self.meta.persist(&mut self.disk)?;
         }
         let offset = self.meta.root_btree_offset;
 
