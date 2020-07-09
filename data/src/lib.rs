@@ -1,8 +1,9 @@
 mod database;
+mod key;
 mod page;
 mod tree;
 
-pub type Key = u128;
+use key::Key;
 
 use database::BlockAllocator;
 pub use database::Database;
